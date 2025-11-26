@@ -1,0 +1,377 @@
+name: Download Large Models (with Split)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Large model to download (will be split)'
+        required: true
+        default: 'llama3.1-70b'
+        type: choice
+        options:
+          - llama3.1-70b
+          - qwen2.5-72b
+          - mixtral-8x7b
+
+jobs:
+  download-and-split:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: 🔍 Set model details
+        id: model_info
+        run: |
+          case "${{ github.event.inputs.model_name }}" in
+            llama3.1-70b)
+              echo "url=https://huggingface.co/bartowski/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=llama3.1-70b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=40GB" >> $GITHUB_OUTPUT
+              ;;
+            qwen2.5-72b)
+              echo "url=https://huggingface.co/bartowski/Qwen2.5-72B-Instruct-GGUF/resolve/main/Qwen2.5-72B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=qwen2.5-72b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=42GB" >> $GITHUB_OUTPUT
+              ;;
+            mixtral-8x7b)
+              echo "url=https://huggingface.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF/resolve/main/mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=mixtral-8x7b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=26GB" >> $GITHUB_OUTPUT
+              ;;
+          esac
+      
+      - name: 📥 Download large model
+        run: |
+          echo "🚀 Downloading ${{ github.event.inputs.model_name }}..."
+          echo "Size: ${{ steps.model_info.outputs.size }}"
+          echo "This may take 30-90 minutes..."
+          
+          start_time=$(date +%s)
+          
+          wget -O "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}" || \
+          curl -L -o "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}"
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          
+          echo "✅ Download completed in $((duration / 60)) minutes!"
+          ls -lh "${{ steps.model_info.outputs.filename }}"
+      
+      - name: ✂️ Split large file into 1.9GB chunks
+        run: |
+          echo "Splitting file into 1.9GB chunks (GitHub limit is 2GB)..."
+          
+          # פיצול ל-1.9GB chunks
+          split -b 1900M "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.filename }}.part"
+          
+          echo "✅ File split completed!"
+          ls -lh *.part*
+          
+          # ספירת חלקים
+          num_parts=$(ls -1 *.part* | wc -l)
+          echo "Total parts: $num_parts"
+          echo "num_parts=$num_parts" >> $GITHUB_ENV
+      
+      - name: 📊 Generate checksums for each part
+        run: |
+          echo "Generating checksums..."
+          
+          for part in *.part*; do
+            sha256sum "$part" | tee "$part.sha256"
+          done
+          
+          # גם checksum למקור
+          sha256sum "${{ steps.model_info.outputs.filename }}" > "${{ steps.model_info.outputs.filename }}.sha256.full"
+          
+          echo "✅ All checksums generated!"
+      
+      - name: 📝 Create merge script for Windows
+        run: |
+          cat > merge_parts.ps1 << 'EOF'
+          #!/usr/bin/env pwsh
+          <#
+          .SYNOPSIS
+              מיזוג חלקי הקובץ חזרה למודל שלם
+          
+          .DESCRIPTION
+              סקריפט למיזוג כל החלקים שהורדת מ-GitHub Releases
+          
+          .EXAMPLE
+              .\merge_parts.ps1 -ModelName "llama3.1-70b-q4.gguf"
+          #>
+          
+          param(
+              [Parameter(Mandatory=$true)]
+              [string]$ModelName
+          )
+          
+          Write-Host "🔗 מיזוג חלקי $ModelName..." -ForegroundColor Cyan
+          
+          # מצא את כל החלקים
+          $parts = Get-ChildItem -Filter "${ModelName}.part*" | 
+                   Where-Object { $_.Name -notmatch '\.sha256$' } | 
+                   Sort-Object Name
+          
+          if ($parts.Count -eq 0) {
+              Write-Host "❌ לא נמצאו חלקים!" -ForegroundColor Red
+              Write-Host "ודא שהורדת את כל הקבצים: ${ModelName}.part*" -ForegroundColor Yellow
+              exit 1
+          }
+          
+          Write-Host "נמצאו $($parts.Count) חלקים" -ForegroundColor Green
+          
+          # מיזוג
+          $output = New-Object System.IO.FileStream($ModelName, [System.IO.FileMode]::Create)
+          
+          foreach ($part in $parts) {
+              Write-Host "מיזוג: $($part.Name)..." -ForegroundColor Gray
+              $input = [System.IO.File]::ReadAllBytes($part.FullName)
+              $output.Write($input, 0, $input.Length)
+          }
+          
+          $output.Close()
+          
+          Write-Host "✅ מיזוג הושלם!" -ForegroundColor Green
+          Write-Host "קובץ סופי: $ModelName" -ForegroundColor Cyan
+          
+          # בדיקת גודל
+          $size = (Get-Item $ModelName).Length / 1GB
+          Write-Host "גודל: $([math]::Round($size, 2)) GB" -ForegroundColor White
+          
+          # אימות checksum (אם קיים)
+          $checksumFile = "${ModelName}.sha256.full"
+          if (Test-Path $checksumFile) {
+              Write-Host "`nמאמת checksum..." -ForegroundColor Yellow
+              $expectedHash = (Get-Content $checksumFile).Split()[0]
+              $actualHash = (Get-FileHash $ModelName -Algorithm SHA256).Hash.ToLower()
+              
+              if ($expectedHash -eq $actualHash) {
+                  Write-Host "✅ Checksum תקין!" -ForegroundColor Green
+              } else {
+                  Write-Host "❌ Checksum לא תואם!" -ForegroundColor Red
+                  Write-Host "Expected: $expectedHash" -ForegroundColor Gray
+                  Write-Host "Actual: $actualHash" -ForegroundColor Gray
+              }
+          }
+          
+          Write-Host "`n🎉 סיימנו! המודל מוכן לשימוש" -ForegroundColor Cyan
+          EOF
+          
+          # גם סקריפט לינוקס/מק
+          cat > merge_parts.sh << 'EOF'
+          #!/bin/bash
+          
+          MODEL_NAME="$1"
+          
+          if [ -z "$MODEL_NAME" ]; then
+              echo "Usage: ./merge_parts.sh <model-name>"
+              echo "Example: ./merge_parts.sh llama3.1-70b-q4.gguf"
+              exit 1
+          fi
+          
+          echo "🔗 Merging parts of $MODEL_NAME..."
+          
+          # מיזוג כל החלקים
+          cat ${MODEL_NAME}.part* > $MODEL_NAME
+          
+          echo "✅ Merge completed!"
+          ls -lh $MODEL_NAME
+          
+          # אימות
+          if [ -f "${MODEL_NAME}.sha256.full" ]; then
+              echo "Verifying checksum..."
+              sha256sum -c "${MODEL_NAME}.sha256.full"
+          fi
+          
+          echo "🎉 Done! Model ready to use"
+          EOF
+          
+          chmod +x merge_parts.sh
+          
+          echo "✅ Merge scripts created!"
+      
+      - name: 📦 Download Ollama
+        run: |
+          echo "Downloading Ollama binary..."
+          wget -O ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe || \
+          curl -L -o ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe
+          
+          ls -lh ollama-windows.exe
+      
+      - name: 📝 Create detailed README
+        run: |
+          cat > DOWNLOAD_INSTRUCTIONS.md << EOF
+          # 📥 הוראות הורדה ומיזוג - ${{ github.event.inputs.model_name }}
+          
+          ## 📦 מה הורדת?
+          
+          המודל **${{ github.event.inputs.model_name }}** (${{ steps.model_info.outputs.size }}) פוצל ל-**${num_parts} חלקים**.
+          
+          ## 🔽 שלב 1: הורדת כל הקבצים
+          
+          הורד את **כל הקבצים** מ-Assets למטה:
+          
+          ### קבצי המודל:
+          - \`${{ steps.model_info.outputs.filename }}.partaa\`
+          - \`${{ steps.model_info.outputs.filename }}.partab\`
+          - \`${{ steps.model_info.outputs.filename }}.partac\`
+          - ... (כל ה-part קבצים)
+          
+          ### קבצי עזר:
+          - \`merge_parts.ps1\` - סקריפט מיזוג לWindows
+          - \`merge_parts.sh\` - סקריפט מיזוג לLinux/Mac
+          - \`${{ steps.model_info.outputs.filename }}.sha256.full\` - Checksum לאימות
+          - \`ollama-windows.exe\` - Ollama
+          
+          ---
+          
+          ## 🔗 שלב 2: מיזוג החלקים
+          
+          ### ב-Windows (PowerShell):
+          
+          \`\`\`powershell
+          # 1. שים את כל הקבצים באותה תיקייה
+          cd C:\Users\YOUR_NAME\Downloads
+          
+          # 2. הרץ את סקריפט המיזוג
+          .\merge_parts.ps1 -ModelName "${{ steps.model_info.outputs.filename }}"
+          
+          # 3. המתן... (לוקח כ-5 דקות)
+          
+          # 4. המודל מוכן! יהיה לך:
+          #    ${{ steps.model_info.outputs.filename }} (קובץ מלא)
+          \`\`\`
+          
+          ### ב-Linux/Mac:
+          
+          \`\`\`bash
+          # 1. שים את כל הקבצים באותה תיקייה
+          cd ~/Downloads
+          
+          # 2. הרץ מיזוג
+          chmod +x merge_parts.sh
+          ./merge_parts.sh "${{ steps.model_info.outputs.filename }}"
+          
+          # 3. המודל מוכן!
+          \`\`\`
+          
+          ### אופציה ידנית (ללא סקריפט):
+          
+          **Windows (CMD):**
+          \`\`\`cmd
+          copy /b ${{ steps.model_info.outputs.filename }}.part* ${{ steps.model_info.outputs.filename }}
+          \`\`\`
+          
+          **Linux/Mac:**
+          \`\`\`bash
+          cat ${{ steps.model_info.outputs.filename }}.part* > ${{ steps.model_info.outputs.filename }}
+          \`\`\`
+          
+          ---
+          
+          ## ✅ שלב 3: אימות (אופציונלי)
+          
+          \`\`\`powershell
+          # Windows
+          Get-FileHash "${{ steps.model_info.outputs.filename }}" -Algorithm SHA256
+          Get-Content "${{ steps.model_info.outputs.filename }}.sha256.full"
+          # השווה את שני ה-hash
+          \`\`\`
+          
+          \`\`\`bash
+          # Linux/Mac
+          sha256sum -c "${{ steps.model_info.outputs.filename }}.sha256.full"
+          \`\`\`
+          
+          ---
+          
+          ## 🚀 שלב 4: הפעלה
+          
+          \`\`\`powershell
+          # העבר את המודל לתיקיית Ollama
+          New-Item -ItemType Directory -Path "\$HOME\.ollama\models" -Force
+          Move-Item "${{ steps.model_info.outputs.filename }}" "\$HOME\.ollama\models\"
+          
+          # הפעל Ollama
+          .\ollama-windows.exe serve
+          
+          # בחלון נפרד:
+          .\ollama-windows.exe run ${{ github.event.inputs.model_name }}
+          \`\`\`
+          
+          ---
+          
+          ## 📊 מידע טכני
+          
+          - **גודל מקורי:** ${{ steps.model_info.outputs.size }}
+          - **מספר חלקים:** ${num_parts}
+          - **גודל כל חלק:** ~1.9GB
+          - **זמן מיזוג משוער:** 3-10 דקות
+          - **מקום פנוי נדרש:** ${{ steps.model_info.outputs.size }} × 2 (קבצים + מודל מאוחד)
+          
+          ---
+          
+          ## ❓ פתרון בעיות
+          
+          ### "חסר קובץ partXX"
+          - ודא שהורדת **את כל** הקבצים מ-Assets
+          - בדוק שאין שגיאות הורדה
+          
+          ### "Checksum לא תואם"
+          - הורד מחדש את החלק הפגום
+          - בדוק שלא שינית שמות קבצים
+          
+          ### "אין מספיק מקום"
+          - צריך פי 2 מהגודל (קבצים + מודל)
+          - מחק קבצי .part אחרי המיזוג
+          
+          ---
+          
+          **בהצלחה! 🎉**
+          EOF
+      
+      - name: 🎉 Create GitHub Release with all parts
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.model_name }}-split-${{ github.run_number }}
+          name: 📦 ${{ github.event.inputs.model_name }} (Split Parts)
+          body_path: DOWNLOAD_INSTRUCTIONS.md
+          files: |
+            ${{ steps.model_info.outputs.filename }}.part*
+            *.sha256
+            merge_parts.ps1
+            merge_parts.sh
+            ollama-windows.exe
+            DOWNLOAD_INSTRUCTIONS.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🧹 Cleanup (remove original large file)
+        run: |
+          echo "Cleaning up original file to save space..."
+          rm -f "${{ steps.model_info.outputs.filename }}"
+          echo "✅ Cleanup complete!"
+      
+      - name: ✅ Success Summary
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║                                                           ║"
+          echo "║          ✅ SPLIT & UPLOAD COMPLETED! ✅                 ║"
+          echo "║                                                           ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📦 Model: ${{ github.event.inputs.model_name }}"
+          echo "📊 Size: ${{ steps.model_info.outputs.size }}"
+          echo "✂️  Parts: ${num_parts}"
+          echo ""
+          echo "🔽 Next steps:"
+          echo "1. Go to Releases tab"
+          echo "2. Download ALL .part files"
+          echo "3. Run merge_parts.ps1 (Windows) or merge_parts.sh (Linux)"
+          echo "4. Use the merged model with Ollama!"
+          echo ""
+          echo "📖 Full instructions in DOWNLOAD_INSTRUCTIONS.md"

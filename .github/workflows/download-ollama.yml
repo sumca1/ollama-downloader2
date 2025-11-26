@@ -1,0 +1,211 @@
+name: Download Ollama Models
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Model to download'
+        required: true
+        default: 'llama3.1-70b'
+        type: choice
+        options:
+          - llama3.1-70b
+          - llama3.1-8b
+          - mixtral-8x7b
+          - llava-13b
+          - codellama-34b
+          - qwen2.5-72b
+          - mistral-7b
+          - deepseek-coder-33b
+
+jobs:
+  download-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: 🔍 Set model details
+        id: model_info
+        run: |
+          case "${{ github.event.inputs.model_name }}" in
+            llama3.1-70b)
+              echo "url=https://huggingface.co/bartowski/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=llama3.1-70b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=40GB" >> $GITHUB_OUTPUT
+              echo "description=הכי חזק - מצוין לעברית ומשימות מורכבות" >> $GITHUB_OUTPUT
+              ;;
+            llama3.1-8b)
+              echo "url=https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=llama3.1-8b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=4.9GB" >> $GITHUB_OUTPUT
+              echo "description=מאוזן - טוב לעברית, מהיר" >> $GITHUB_OUTPUT
+              ;;
+            mixtral-8x7b)
+              echo "url=https://huggingface.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF/resolve/main/mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=mixtral-8x7b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=26GB" >> $GITHUB_OUTPUT
+              echo="description=מהיר ואיכותי - 8 מומחים במקביל" >> $GITHUB_OUTPUT
+              ;;
+            llava-13b)
+              echo "url=https://huggingface.co/mys/ggml_llava-v1.5-13b/resolve/main/ggml-model-q4_k.gguf" >> $GITHUB_OUTPUT
+              echo "mmproj_url=https://huggingface.co/mys/ggml_llava-v1.5-13b/resolve/main/mmproj-model-f16.gguf" >> $GITHUB_OUTPUT
+              echo "filename=llava-13b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "mmproj_filename=llava-13b-mmproj.gguf" >> $GITHUB_OUTPUT
+              echo "size=8GB+2GB" >> $GITHUB_OUTPUT
+              echo "description=ראייה ממוחשבת - OCR, תיאור תמונות" >> $GITHUB_OUTPUT
+              ;;
+            codellama-34b)
+              echo "url=https://huggingface.co/TheBloke/CodeLlama-34B-Instruct-GGUF/resolve/main/codellama-34b-instruct.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=codellama-34b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=20GB" >> $GITHUB_OUTPUT
+              echo "description=תכנות מתקדם - קוד, debug, refactoring" >> $GITHUB_OUTPUT
+              ;;
+            qwen2.5-72b)
+              echo "url=https://huggingface.co/bartowski/Qwen2.5-72B-Instruct-GGUF/resolve/main/Qwen2.5-72B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=qwen2.5-72b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=42GB" >> $GITHUB_OUTPUT
+              echo "description=סיני מתקדם - רב לשוני, חזק מאוד" >> $GITHUB_OUTPUT
+              ;;
+            mistral-7b)
+              echo "url=https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=mistral-7b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=4.1GB" >> $GITHUB_OUTPUT
+              echo "description=קל ומהיר - טוב להתחלה" >> $GITHUB_OUTPUT
+              ;;
+            deepseek-coder-33b)
+              echo "url=https://huggingface.co/TheBloke/deepseek-coder-33B-instruct-GGUF/resolve/main/deepseek-coder-33b-instruct.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=deepseek-coder-33b-q4.gguf" >> $GITHUB_OUTPUT
+              echo "size=19GB" >> $GITHUB_OUTPUT
+              echo "description=קוד מתקדם - מתחרה ב-GPT-4 בתכנות" >> $GITHUB_OUTPUT
+              ;;
+          esac
+      
+      - name: 📥 Download model
+        run: |
+          echo "Downloading ${{ github.event.inputs.model_name }} from HuggingFace..."
+          echo "Size: ${{ steps.model_info.outputs.size }}"
+          echo "Description: ${{ steps.model_info.outputs.description }}"
+          
+          wget -O "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}" || \
+          curl -L -o "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}"
+          
+          # הורדת mmproj עבור LLaVA (אם קיים)
+          if [ ! -z "${{ steps.model_info.outputs.mmproj_url }}" ]; then
+            echo "Downloading vision projector..."
+            wget -O "${{ steps.model_info.outputs.mmproj_filename }}" "${{ steps.model_info.outputs.mmproj_url }}" || \
+            curl -L -o "${{ steps.model_info.outputs.mmproj_filename }}" "${{ steps.model_info.outputs.mmproj_url }}"
+          fi
+          
+          echo "Download complete!"
+          ls -lh *.gguf
+      
+      - name: 📊 Generate SHA256 checksum
+        run: |
+          sha256sum "${{ steps.model_info.outputs.filename }}" > "${{ steps.model_info.outputs.filename }}.sha256"
+          cat "${{ steps.model_info.outputs.filename }}.sha256"
+      
+      - name: 📦 Download Ollama binary
+        run: |
+          echo "Downloading Ollama for Windows..."
+          wget -O ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe || \
+          curl -L -o ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe
+          
+          ls -lh ollama-windows.exe
+      
+      - name: 📝 Create README for release
+        run: |
+          cat > RELEASE_README.md << 'EOF'
+          # Ollama Model: ${{ github.event.inputs.model_name }}
+          
+          ## 📦 קבצים להורדה
+          
+          - **${{ steps.model_info.outputs.filename }}** - המודל (${{ steps.model_info.outputs.size }})
+          - **${{ steps.model_info.outputs.filename }}.sha256** - Checksum לאימות
+          - **ollama-windows.exe** - Ollama לWindows
+          
+          ## 🚀 הוראות התקנה
+          
+          ### שלב 1: הורד את הקבצים
+          ```powershell
+          # צור תיקייה
+          New-Item -ItemType Directory -Path "$HOME\ollama" -Force
+          cd "$HOME\ollama"
+          
+          # הורד את כל הקבצים מ-Assets למטה
+          ```
+          
+          ### שלב 2: אמת את הקובץ (אופציונלי)
+          ```powershell
+          # חשב SHA256
+          Get-FileHash "${{ steps.model_info.outputs.filename }}" -Algorithm SHA256
+          
+          # השווה לקובץ .sha256
+          Get-Content "${{ steps.model_info.outputs.filename }}.sha256"
+          ```
+          
+          ### שלב 3: הפעל את Ollama
+          ```powershell
+          # הפעל את Ollama
+          .\ollama-windows.exe serve
+          ```
+          
+          ### שלב 4: טען את המודל (בחלון נפרד)
+          ```powershell
+          # העתק את המודל לתיקיית Ollama
+          $ollamaDir = "$env:USERPROFILE\.ollama\models"
+          New-Item -ItemType Directory -Path $ollamaDir -Force
+          Copy-Item "${{ steps.model_info.outputs.filename }}" "$ollamaDir\"
+          
+          # הרץ את המודל
+          .\ollama-windows.exe run ${{ github.event.inputs.model_name }}
+          ```
+          
+          ## 💡 בדיקה מהירה
+          ```powershell
+          # שאל שאלה
+          .\ollama-windows.exe run ${{ github.event.inputs.model_name }} "מה זה Python?"
+          ```
+          
+          ## 🌐 שימוש מ-API
+          ```python
+          import requests
+          
+          response = requests.post('http://localhost:11434/api/generate',
+              json={
+                  'model': '${{ github.event.inputs.model_name }}',
+                  'prompt': 'שלום עולם!',
+                  'stream': False
+              })
+          print(response.json()['response'])
+          ```
+          
+          ---
+          
+          **הורדה אוטומטית ב-GitHub Actions**  
+          נוצר: $(date)  
+          גודל: ${{ steps.model_info.outputs.size }}
+          EOF
+      
+      - name: 🎉 Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.model_name }}-${{ github.run_number }}
+          name: Ollama Model - ${{ github.event.inputs.model_name }} (Run ${{ github.run_number }})
+          body_path: RELEASE_README.md
+          files: |
+            *.gguf
+            *.sha256
+            ollama-windows.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: ✅ Success notification
+        run: |
+          echo "✅ הורדה הושלמה!"
+          echo "📦 קובץ: ${{ steps.model_info.outputs.filename }}"
+          echo "📊 גודל: ${{ steps.model_info.outputs.size }}"
+          echo "🔗 המודל זמין ב-Releases"
