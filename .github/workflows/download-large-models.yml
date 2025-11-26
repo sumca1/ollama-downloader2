@@ -44,48 +44,22 @@ jobs:
       
       - name: 📥 Download large model
         run: |
-          echo "🚀 Downloading ${{ github.event.inputs.model_name }}..."
-          echo "Size: ${{ steps.model_info.outputs.size }}"
-          echo "This may take 30-90 minutes..."
-          
-          start_time=$(date +%s)
-          
-          wget -O "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}" || \
-          curl -L -o "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}"
-          
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-          
-          echo "✅ Download completed in $((duration / 60)) minutes!"
+          wget -q --show-progress -O "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}" || \
+          curl -sL --progress-bar -o "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.url }}"
           ls -lh "${{ steps.model_info.outputs.filename }}"
       
       - name: ✂️ Split large file into 1.9GB chunks
         run: |
-          echo "Splitting file into 1.9GB chunks (GitHub limit is 2GB)..."
-          
-          # פיצול ל-1.9GB chunks
           split -b 1900M "${{ steps.model_info.outputs.filename }}" "${{ steps.model_info.outputs.filename }}.part"
-          
-          echo "✅ File split completed!"
-          ls -lh *.part*
-          
-          # ספירת חלקים
           num_parts=$(ls -1 *.part* | wc -l)
-          echo "Total parts: $num_parts"
           echo "num_parts=$num_parts" >> $GITHUB_ENV
       
       - name: 📊 Generate checksums for each part
         run: |
-          echo "Generating checksums..."
-          
           for part in *.part*; do
-            sha256sum "$part" | tee "$part.sha256"
+            sha256sum "$part" > "$part.sha256"
           done
-          
-          # גם checksum למקור
           sha256sum "${{ steps.model_info.outputs.filename }}" > "${{ steps.model_info.outputs.filename }}.sha256.full"
-          
-          echo "✅ All checksums generated!"
       
       - name: 📝 Create merge script for Windows
         run: |
@@ -194,11 +168,8 @@ jobs:
       
       - name: 📦 Download Ollama
         run: |
-          echo "Downloading Ollama binary..."
-          wget -O ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe || \
-          curl -L -o ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe
-          
-          ls -lh ollama-windows.exe
+          wget -q -O ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe || \
+          curl -sL -o ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe
       
       - name: 📝 Create detailed README
         run: |
@@ -352,26 +323,8 @@ jobs:
       
       - name: 🧹 Cleanup (remove original large file)
         run: |
-          echo "Cleaning up original file to save space..."
           rm -f "${{ steps.model_info.outputs.filename }}"
-          echo "✅ Cleanup complete!"
       
       - name: ✅ Success Summary
         run: |
-          echo "╔═══════════════════════════════════════════════════════════╗"
-          echo "║                                                           ║"
-          echo "║          ✅ SPLIT & UPLOAD COMPLETED! ✅                 ║"
-          echo "║                                                           ║"
-          echo "╚═══════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "📦 Model: ${{ github.event.inputs.model_name }}"
-          echo "📊 Size: ${{ steps.model_info.outputs.size }}"
-          echo "✂️  Parts: ${num_parts}"
-          echo ""
-          echo "🔽 Next steps:"
-          echo "1. Go to Releases tab"
-          echo "2. Download ALL .part files"
-          echo "3. Run merge_parts.ps1 (Windows) or merge_parts.sh (Linux)"
-          echo "4. Use the merged model with Ollama!"
-          echo ""
-          echo "📖 Full instructions in DOWNLOAD_INSTRUCTIONS.md"
+          echo "Done: ${{ github.event.inputs.model_name }} - ${num_parts} parts"
