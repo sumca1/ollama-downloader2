@@ -1,0 +1,97 @@
+name: Smart Download (Split While Downloading)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Model to download'
+        required: true
+        default: 'mistral-7b'
+        type: choice
+        options:
+          - mistral-7b
+          - llama3.1-8b
+
+jobs:
+  download-and-split:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v3
+      
+      - name: 🔍 Set model info
+        id: model_info
+        run: |
+          case "${{ github.event.inputs.model_name }}" in
+            mistral-7b)
+              echo "url=https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=mistral-7b-q4.gguf" >> $GITHUB_OUTPUT
+              ;;
+            llama3.1-8b)
+              echo "url=https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf" >> $GITHUB_OUTPUT
+              echo "filename=llama3.1-8b-q4.gguf" >> $GITHUB_OUTPUT
+              ;;
+          esac
+      
+      - name: 📥 Download and split (saves space!)
+        run: |
+          URL="${{ steps.model_info.outputs.url }}"
+          FILENAME="${{ steps.model_info.outputs.filename }}"
+          
+          echo "Downloading and splitting in real-time..."
+          curl -L "$URL" | split -b 95M - "${FILENAME}.part"
+          
+          num_parts=$(ls -1 ${FILENAME}.part* | wc -l)
+          echo "Created $num_parts parts"
+          echo "num_parts=$num_parts" >> $GITHUB_ENV
+          
+          ls -lh ${FILENAME}.part* | head -5
+      
+      - name: 📊 Generate checksums
+        run: |
+          for part in ${{ steps.model_info.outputs.filename }}.part*; do
+            sha256sum "$part" > "$part.sha256"
+          done
+      
+      - name: 📝 Create merge scripts
+        run: |
+          cat > merge_parts.ps1 << 'EOF'
+          $parts = Get-ChildItem *.partaa
+          $output = ($parts[0].Name -split '\.part')[0]
+          $stream = [System.IO.File]::Create($output)
+          Get-ChildItem "$output.part*" | Sort-Object | ForEach-Object {
+              $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+              $stream.Write($bytes, 0, $bytes.Length)
+          }
+          $stream.Close()
+          Write-Host "Done: $output"
+          EOF
+          
+          cat > merge_parts.sh << 'EOF'
+          #!/bin/bash
+          OUTPUT=$(ls *.partaa | sed 's/\.part.*//')
+          cat ${OUTPUT}.part* > ${OUTPUT}
+          echo "Done: ${OUTPUT}"
+          EOF
+          chmod +x merge_parts.sh
+      
+      - name: 📦 Download Ollama
+        run: |
+          wget -q -O ollama-windows.exe https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.exe
+      
+      - name: 🎉 Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.model_name }}-v${{ github.run_number }}
+          name: ${{ github.event.inputs.model_name }} - ${{ env.num_parts }} parts x 95MB
+          body: |
+            Download ALL files, then run merge_parts.ps1 or merge_parts.sh
+          files: |
+            *.part*
+            *.sha256
+            merge_parts.ps1
+            merge_parts.sh
+            ollama-windows.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
